@@ -19,6 +19,7 @@ typedef struct {
     int isAlive; // 1: alive, 0: dead
 } FishTank;
 
+// 전역 변수 정의
 FishTank fishTanks[NUM];    // 물고기 어항 배열
 int level = 1;
 int position = 0;
@@ -27,12 +28,18 @@ bool gameOver = false;
 bool gameWin = false;
 long startTime = 0;
 long lastUpdateTime = 0;
-
+// SDL 관련 변수
 SDL_Window* window = NULL;          // SDL 창
 SDL_Renderer* renderer = NULL;      // SDL 렌더러
 TTF_Font* font = NULL;              // 폰트
 SDL_Texture* fishTexture = NULL;    // 물고기 텍스처
+// 오디오 관련 변수
+SDL_AudioDeviceID audioDevice = 0;  // 소리를 출력할 오디오 장치 식별자
+SDL_AudioSpec wavSpec;              // wav 파일의 오디오 형식 정보
+Uint8* wavBuffer = NULL;            // wav 파일의 실제 소리 데이터
+Uint32 wavLength = 0;               // 소리 데이터의 길이, 단위는 바이트
 
+// 함수 프로토타입 선언
 bool engine_init();                 // 엔진 초기화 함수
 void initGame();                    // 게임 초기화 함수
 void renderText(const char* text, int x, int y); // 텍스트 렌더링 함수
@@ -43,6 +50,10 @@ void cleanupGame();                 // 게임 종료 및 자원 해제 함수
 void handleInput(SDL_Event* e);     // 입력 처리 함수
 SDL_Texture* loadTexture(const char* path); // 텍스처 로드 함수
 
+bool initAudio();                   // 오디오 초기화 함수
+void playWaterSound();              // 물 주는 소리 재생 함수
+
+// 메인 함수
 int main(int argc, char* argv[]) {
     // 엔진 초기화
     if (!engine_init()) {
@@ -76,8 +87,8 @@ int main(int argc, char* argv[]) {
 
 bool engine_init()
 {
-    // SDL 초기화
-    if (SDL_Init(SDL_INIT_VIDEO) != 0)
+    // SDL 초기화, 비디오와 오디오 서브시스템 초기화
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0)
         return 0;
     // 창 생성 및 렌더러 초기화
     window = SDL_CreateWindow("Raising Fishes", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_WIDTH, SCREEN_HEIGHT, 0);
@@ -93,12 +104,54 @@ bool engine_init()
         SDL_Quit();
         return 0;
     }
+    // 물고기 텍스처 로드
     fishTexture = loadTexture("fish.bmp");          // 물고기 이미지 파일 경로 필요
     if (!fishTexture) {                             // 텍스처 로드 실패 시 에러 메시지 출력
         SDL_Quit();
         return 0;
     }
+    // 오디오 초기화
+    if (!initAudio()) {                            // 오디오 초기화 실패 시 에러 메시지 출력
+        SDL_Quit();
+        return 0;
+    }
     return 1;
+}
+
+// 오디오 초기화 함수 정의
+bool initAudio()
+{
+    // WAV 파일 로드, water.wav 파일을 메모리에 로드하여 wavSpec, wavBuffer, wavLength에 정보 저장
+    if (SDL_LoadWAV("water.wav", &wavSpec, &wavBuffer, &wavLength) == NULL) {
+        printf("WAV 파일 로드 실패: %s\n", SDL_GetError());
+        return false;
+    }
+    // 오디오 출력 장치 열기
+    audioDevice = SDL_OpenAudioDevice(
+        NULL,       // 기본 오디오 장치 사용
+        0,          // 0: 출력 장치
+        &wavSpec,   // wav 파일의 오디오 형식
+        NULL,       // 원하는 형식 그대로 사용
+        0
+    );
+    if (audioDevice == 0) {
+        printf("오디오 장치 열기 실패: %s\n", SDL_GetError());
+        SDL_FreeWAV(wavBuffer);
+        wavBuffer = NULL;
+        return false;
+    }
+    // 오디오 장치를 재생가능한 상태로 만든다.
+    SDL_PauseAudioDevice(audioDevice, 0); // 오디오 장치 재생 시작, 0: 재생, 1: 일시정지
+
+    return true;
+}
+// 물 주는 소리 재생 함수 정의
+void playWaterSound()
+{
+    if (audioDevice != 0 && wavBuffer != NULL) {
+        SDL_ClearQueuedAudio(audioDevice);                  // 기존에 큐에 남아있는 소리 데이터 제거
+        SDL_QueueAudio(audioDevice, wavBuffer, wavLength);  // wavBuffer에 저장된 소리 데이터를 오디오 장치에 보내서 재생
+    }
 }
 
 void initGame() {
@@ -140,6 +193,13 @@ void cleanupGame() {
     SDL_Delay(3000);                            // 메시지 표시 후 3초 대기
 
     SDL_DestroyTexture(fishTexture);            // 물고기 텍스처 메모리 해제
+    if (audioDevice != 0) {
+        SDL_CloseAudioDevice(audioDevice);      // 오디오 장치 닫기
+    }
+
+    if (wavBuffer != NULL) {
+        SDL_FreeWAV(wavBuffer);                 // WAV 버퍼 메모리 해제
+    }
     TTF_CloseFont(font);                        // 폰트 메모리 해제
     SDL_DestroyRenderer(renderer);              // 렌더러 메모리 해제
     SDL_DestroyWindow(window);                  // 창 메모리 해제
@@ -247,6 +307,7 @@ void handleInput(SDL_Event* e) {
         case SDLK_k:
             if (fishTanks[position].water >= 0 && fishTanks[position].water < 100)  // 물이 0 이상 100 미만일 때만 물을 줄 수 있도록 조건 추가
                 fishTanks[position].water += 5;
+            playWaterSound(); // 물 주는 소리 재생 
             if (fishTanks[position].water > 100) fishTanks[position].water = 100; // 물이 100을 초과하지 않도록 제한
             break;
         case SDLK_ESCAPE:
